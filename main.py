@@ -597,7 +597,7 @@ def get_letta_client(api_key: str, api_url: str, timeout: float = 30.0):
     from letta_client import Letta
     
     return Letta(
-        token=api_key,
+        api_key=api_key,
         base_url=api_url,
         timeout=timeout
     )
@@ -788,28 +788,7 @@ def find_default_project(client):
     Find the 'Default Project' by name from all available projects
     Returns (project_id, project_name, project_slug) or (None, None, None) if not found
     """
-    try:
-        # Try to search by name first (if the API supports it)
-        try:
-            projects = client.projects.list(name="Default Project")
-            if hasattr(projects, 'projects') and len(projects.projects) > 0:
-                project = projects.projects[0]
-                return project.id, project.name, project.slug
-        except Exception:
-            # Fallback to listing all projects if name filter doesn't work
-            pass
-
-        # Fallback: get all projects and search manually
-        all_projects = get_all_projects(client)
-        for project in all_projects:
-            if project.name == "Default Project":
-                return project.id, project.name, project.slug
-
-        return None, None, None
-
-    except Exception as e:
-        print(f"Error finding Default Project: {e}")
-        return None, None, None
+    return None, None, None
 
 def get_user_preferences(user_id: str) -> Dict[str, Any]:
     """
@@ -854,14 +833,14 @@ def user_needs_default_agent(client, project_id: str, user_id: str) -> bool:
             return False
 
         # Check if user has any agents in the project
-        agents = client.agents.list(project_id=project_id)
+        agents = client.agents.list()
         return len(agents) == 0
 
     except Exception as e:
         print(f"Error checking if user needs default agent: {e}")
         return False
 
-def create_default_agent(client, project_id: str, user_name: str):
+def create_default_agent(client, project_id: str = None, user_name: str = "User"):
     """
     Create a simple, engaging default agent for new users
     """
@@ -1010,7 +989,7 @@ First contact: Telegram
                 },
             ],
             tools=['web_search', 'archival_memory_insert', 'archival_memory_search', 'conversation_search', 'send_message'],
-            project_id=project_id,
+            project_id=None,
             enable_sleeptime=True,
             request_options={
                 'timeout_in_seconds': 120,  # 2 minutes for default agent creation
@@ -1027,7 +1006,7 @@ First contact: Telegram
         # Re-raise to preserve the original error for the caller
         raise
 
-def create_ion_agent(client, project_id: str, user_name: str):
+def create_ion_agent(client, project_id: str = None, user_name: str = "User"):
     """
     Create Ion - a malleable methodical guide that builds understanding through collaboration
     
@@ -1268,7 +1247,7 @@ Examples:
                 'web_search',
                 'fetch_webpage'
             ],
-            project_id=project_id,
+            project_id=None,
             enable_sleeptime=True,
             request_options={
                 'timeout_in_seconds': 180,  # 3 minutes for complex agent creation
@@ -1424,18 +1403,10 @@ def process_message_async(update: dict):
                     send_telegram_message(chat_id, "(processing)")
                     client = get_letta_client(letta_api_key, letta_api_url, timeout=120.0)
 
-                    # Get current project
-                    current_project = get_chat_project(chat_id)
-                    if not current_project:
-                        send_telegram_message(chat_id, "(error: no project configured - use /projects to select one)")
-                        return
-
-                    project_id = current_project["project_id"]
-
                     # Create default agent
                     send_telegram_message(chat_id, "(creating agent Ion)")
                     try:
-                        agent = create_default_agent(client, project_id, user_name)
+                        agent = create_default_agent(client, user_name=user_name)
                     except Exception as create_error:
                         error_msg = f"(error: failed to create agent - {str(create_error)[:100]})"
                         send_telegram_message(chat_id, error_msg)
@@ -1957,17 +1928,10 @@ def handle_template_selection(template_name: str, user_id: str, chat_id: str):
         # Handle Ion as special case with sophisticated memory architecture
         if template_name == "ion":
             try:
-                # Get current project for user
-                current_project = get_chat_project(chat_id)
-                if not current_project:
-                    send_telegram_message(chat_id, "(error: no project configured - use /projects to select one)")
-                    return
-
-                project_id = current_project["project_id"]
                 user_name = user_credentials.get("user_name", "User")
 
                 # Create Ion agent with sophisticated memory architecture
-                agent = create_ion_agent(client, project_id, user_name)
+                agent = create_ion_agent(client, user_name=user_name)
                 
                 # Save agent selection
                 save_chat_agent(chat_id, agent.id, agent.name)
@@ -2461,27 +2425,7 @@ def get_all_projects(client):
     """
     Get all projects across all pages from the Letta API
     """
-    all_projects = []
-    offset = 0
-    limit = 19  # Required page size
-
-    while True:
-        try:
-            response = client.projects.list(offset=offset, limit=limit)
-            all_projects.extend(response.projects)
-
-            # Check if there are more pages
-            if not response.has_next_page:
-                break
-
-            # Move to next page
-            offset += len(response.projects)
-
-        except Exception as e:
-            print(f"Error fetching projects page at offset {offset}: {e}")
-            raise
-
-    return all_projects
+    return []
 
 def blockquote_message(message: str) -> str:
     """
@@ -2597,7 +2541,7 @@ def handle_login_command(message_text: str, update: dict, chat_id: str):
             # Check if user has agents to offer appropriate next steps
             try:
                 client = get_letta_client(api_key, api_url, timeout=60.0)
-                agents = client.agents.list(project_id=default_project_id) if default_project_id else []
+                agents = client.agents.list()
                 
                 if agents and len(agents) > 0:
                     response += "want to pick an agent?\n\n"
@@ -2847,13 +2791,6 @@ def handle_make_default_agent_command(update: dict, chat_id: str):
             send_telegram_message(chat_id, "(authentication required - use /login to sign in)")
             return
 
-        # Get current project
-        current_project = get_chat_project(chat_id)
-        if not current_project:
-            send_telegram_message(chat_id, "(error: no project configured - use /projects to select one)")
-            return
-
-        project_id = current_project["project_id"]
         letta_api_key = user_credentials["api_key"]
         letta_api_url = user_credentials["api_url"]
 
@@ -2865,7 +2802,7 @@ def handle_make_default_agent_command(update: dict, chat_id: str):
             # Create the default agent
             send_telegram_message(chat_id, "(creating assistant)")
             try:
-                agent = create_default_agent(client, project_id, user_name)
+                agent = create_default_agent(client, user_name=user_name)
             except Exception as create_error:
                 error_msg = f"❌ **Failed to create default agent:**\n\n"
                 error_msg += f"**Error:** {str(create_error)}\n\n"
@@ -2951,13 +2888,7 @@ def handle_template_command(message_text: str, update: dict, chat_id: str):
         if not user_credentials:
             send_telegram_message(chat_id, "(you need to /login first)")
             return
-            
-        # Check for project
-        current_project = get_chat_project(chat_id)
-        if not current_project:
-            send_telegram_message(chat_id, "(no project configured - use /projects to select one)")
-            return
-        
+
         # Parse template name if provided
         parts = message_text.strip().split(maxsplit=1)
         if len(parts) > 1:
@@ -3126,14 +3057,6 @@ def handle_agent_command(message: str, update: dict, chat_id: str):
         # Use user-specific credentials
         letta_api_key = user_credentials["api_key"]
         letta_api_url = user_credentials["api_url"]
-
-        # Get current project for this chat
-        current_project = get_chat_project(chat_id)
-        if not current_project:
-            send_telegram_message(chat_id, "(error: no project configured - use /projects to select one)")
-            return
-
-        project_id = current_project["project_id"]
 
         # Parse the command: /agent [agent_id]
         parts = message.strip().split()
@@ -3484,7 +3407,7 @@ def handle_agents_command(update: dict, chat_id: str):
                 current_agent_name = current_agent_info["agent_name"]
 
             # List all available agents in the current project
-            agents = client.agents.list(project_id=project_id)
+            agents = client.agents.list()
 
             if not agents:
                 send_telegram_message(chat_id, "**Available Agents:**\n\nNo agents available. Create an agent first.")
@@ -4611,7 +4534,7 @@ def handle_projects_command(message: str, update: dict, chat_id: str):
                 # Count agents in this project (skip for performance if many projects)
                 if len(projects) <= 5:
                     try:
-                        agents = client.agents.list(project_id=project.id, limit=1)
+                        agents = client.agents.list(limit=1)
                         agent_count = len(agents) if agents else 0
                         response += f"• {project.name} ({agent_count} agents)\n"
                     except:
